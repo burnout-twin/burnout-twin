@@ -77,9 +77,6 @@ export function StressDrivers() {
             )
           })}
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Factors are ranked by impact. Arrows show recent direction.
-        </p>
       </div>
     </div>
   )

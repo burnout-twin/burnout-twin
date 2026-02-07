@@ -44,9 +44,12 @@ export default function Page() {
         <div className="grid gap-6 lg:grid-cols-[1fr_1fr] items-stretch">
 
           {/* Left Column — The Twin */}
-          <section className="flex flex-col items-center justify-center rounded-2xl bg-card border border-border shadow-sm py-12 px-6">
+          <section className="flex flex-col rounded-2xl bg-card border border-border shadow-sm pt-6 pb-12 px-6">
             <h2 className="sr-only">State at a Glance</h2>
-            <TwinAvatar band="Focused" />
+            <p className="text-3xl font-semibold text-foreground">Hey Twin!</p>
+            <div className="flex-1 flex items-center justify-center min-h-0">
+              <TwinAvatar band="Focused" />
+            </div>
           </section>
 
           {/* Right Column — Metrics & Intervention */}
