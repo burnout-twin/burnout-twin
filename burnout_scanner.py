@@ -54,6 +54,52 @@ async def fetch_commits_directly():
     
     return []
 
+
+def calculate_burnout_score_locally(commits):
+    """
+    Lightweight local heuristic to estimate burnout damage from commits.
+    Returns a dict with 'damage' (int 0-100) and 'signals' (list).
+    This mirrors the shape the orchestrator expects when deciding damage.
+    """
+    if not commits:
+        return {"damage": 0, "signals": [], "count": 0}
+
+    score = 0
+    signals = []
+    keywords = ["fix", "broken", "god", "wip", "urgent", "bug"]
+
+    for c in commits:
+        msg = (c.get("message") or "").lower()
+        date_s = c.get("date") or c.get("author_date") or ""
+        # Parse hour if possible
+        try:
+            dt = datetime.fromisoformat(date_s.replace("Z", "+00:00"))
+            hour = dt.hour
+        except Exception:
+            hour = None
+
+        # Zombie hours: 1-4 AM
+        if hour is not None and 1 <= hour <= 4:
+            score += 10
+            signals.append(f"Zombie commit at hour {hour}")
+
+        # Short/opaque messages
+        if len(msg.strip()) > 0 and len(msg.strip()) < 5:
+            score += 5
+            signals.append("Short commit message")
+
+        # Despair keywords
+        for kw in keywords:
+            if kw in msg:
+                score += 8
+                signals.append(f"Found keyword '{kw}' in message")
+                break
+
+    # Normalize and cap
+    damage = min(100, score)
+
+    return {"damage": damage, "signals": list(dict.fromkeys(signals)), "count": len(commits)}
+
 # --- 2. THE DEDALUS BRAIN (Analysis) ---
 async def analyze_with_dedalus(commits):
     """

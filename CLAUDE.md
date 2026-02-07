@@ -1,402 +1,100 @@
 # PROXY - Digital Twin Burnout Prevention System
 
-## Project Overview
+## Project Overview (updated)
 
-PROXY is a TartanHacks 2026 hackathon project that visualizes developer burnout through a "Digital Twin" interface. It connects to real workflow data (GitHub & Calendar) via Dedalus MCP and uses a Conway AI decision engine to prevent burnout through a "Cortex vs. Core" intervention system.
+PROXY is a TartanHacks 2026 project that visualizes developer burnout via a "Digital Twin". It ingests workflow signals (GitHub commits, Spotify, Calendar) via Dedalus MCP adapters and uses an AI-driven Persona Manager to decide how the twin's vitals should change.
 
-**Target Prize Tracks:**
-- Conway AI (Decision Support, $1000) - PRIMARY
-- Dedalus Labs MCP hosting ($1000) - SECONDARY
-
-**Core Value Proposition:** 
-Replace ineffective text warnings about overwork with visceral visual feedback and multi-agent decision conflicts that force acknowledgment of productivity vs. health trade-offs.
+Core change: stat updates are now decided by the PersonaManager (AI). The orchestrator aggregates sensor inputs and delegates the decision about how much to increase/decrease vitals to Minds AI via the PersonaManager.
 
 ---
 
-## Tech Stack & Architecture
+## High-level Architecture (current)
 
-### Backend (Python/FastAPI)
-- **Runtime:** Python 3.10+
-- **Framework:** FastAPI (for REST API)
-- **Validation:** Pydantic v2
-- **Database:** SQLite (local state persistence)
-- **MCP Integration:** Dedalus MCP SDK for GitHub & Calendar
-- **LLM:** Anthropic Claude API (for Conway decision engine)
+- `orchestrator.py`: central loop — polls sensors (MCP wrappers or local fallbacks), aggregates events, forwards them to `PersonaManager`, and asks `minds_ai` for reactive voice output.
+- `persona_manager.py`: authoritative persona state; sends `persona_state + events` to Minds AI and applies returned `adjustments` or `new_stats` (structured JSON).
+- `mcp_github.py`, `mcp_spotify.py`, `mcp_calendar.py`: small adapter modules that call Dedalus MCPs via `minds_ai.run_prompt(..., mcp_servers=[...])` and return parsed lists.
+- `burnout_scanner.py`: direct GitHub fetcher and local heuristics; kept as a fallback for reliability.
+- `minds_ai.py`: Dedalus runner wrapper used by both MCP adapters and persona manager.
 
-### Frontend (React/Tailwind)
-- **Framework:** React 18 with Vite
-- **Styling:** Tailwind CSS
-- **Animations:** Framer Motion
-- **Icons:** Lucide React
-- **State Management:** React Context API (keep it simple for hackathon)
-
-### Project Structure
-```
-proxy/
-├── backend/
-│   ├── main.py              # FastAPI app, routes
-│   ├── models.py            # Pydantic models
-│   ├── db.py                # SQLite connection/operations
-│   ├── mcp_client.py        # Dedalus MCP integration
-│   ├── conway_engine.py     # Multi-agent decision logic
-│   └── requirements.txt
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── components/
-│   │   │   ├── Dashboard.jsx
-│   │   │   ├── TwinAvatar.jsx
-│   │   │   ├── TaskStream.jsx
-│   │   │   ├── StatsPanel.jsx
-│   │   │   └── InterventionModal.jsx
-│   │   └── hooks/
-│   │       └── useTwinState.js
-│   ├── package.json
-│   └── vite.config.js
-├── CLAUDE.md
-└── README.md
-```
+Key policy: MCPs are external services invoked by the Dedalus runner. Orchestrator aggregates MCP outputs locally rather than wiring MCP-to-MCP in-repo.
 
 ---
 
-## Coding Standards & Conventions
+## New PersonaManager Contract (what the AI should return)
 
-### General Principles
-1. **Ship Fast, Iterate Later:** Prioritize working demo over perfection
-2. **Visual Impact > Code Elegance:** The demo needs to WOW judges
-3. **Mock First, Integrate Later:** Start with hardcoded data, swap for real APIs incrementally
-4. **Comment Implementation TODOs:** Mark where real MCP/LLM calls will go
+When `persona_manager.update_from_events()` calls Minds AI it sends a JSON payload with fields `persona_state` and `events` and instructs the model to return ONLY valid JSON with any of these fields:
 
-### Python Standards
-- Use type hints everywhere: `def update_hp(twin_id: str, delta: int) -> TwinState`
-- Pydantic models for ALL data structures
-- FastAPI dependency injection for DB connections
-- Async/await for all route handlers (even if not strictly necessary)
-- Snake_case for variables/functions, PascalCase for classes
+- `adjustments`: {"energy": -10, "resilience": +5, "social": -20}  (deltas to apply)
+- `new_stats`: {"energy": 80, "resilience": 90, "social": 70}  (absolute replacements; preferred if present)
+- `memory_additions`: ["GitHub: Fixed panic at 3AM"]  (strings to prepend to persona memory)
+- `explanation`: "Because of repeated night commits..."  (human-readable rationale)
+- `push`: true|false  (whether orchestrator should call `push_persona()` / request assessment)
 
-### React Standards
-- Functional components only (no class components)
-- Custom hooks for state logic (`useTwinState`, `useConwayDecision`)
-- Props destructuring: `const InterventionModal = ({ isOpen, onClose, conflict }) => {}`
-- Tailwind utility classes inline (no separate CSS files)
-- Component file organization: imports → component → export
-
-### Naming Conventions
-- **Backend routes:** `/api/twin/state`, `/api/twin/ingest`, `/api/conway/decide`
-- **Frontend components:** PascalCase, descriptive (`InterventionModal`, not `Modal`)
-- **State variables:** Descriptive, not abbreviated (`healthPoints` not `hp`)
-- **Database fields:** snake_case matching Pydantic models
+Notes:
+- Vitals are clamped to 0..100 after applying adjustments or new_stats.
+- The orchestrator treats `persona_manager` as authoritative for `vitals`.
 
 ---
 
-## Core Data Models
+## How to Run (local dev)
 
-### TwinState (Pydantic Model)
-```python
-class TwinState(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    hp: int = Field(default=100, ge=0, le=100)  # Health Points
-    xp: int = Field(default=0, ge=0)  # Productivity Points
-    status: TwinStatus = TwinStatus.THRIVING
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
-    
-class TwinStatus(str, Enum):
-    THRIVING = "thriving"      # HP > 70
-    STRAINED = "strained"      # HP 30-70
-    BURNOUT = "burnout"        # HP < 30
+Environment vars (recommended):
+
+```bash
+export USE_MCP=true           # enable MCP adapters (otherwise fallbacks run)
+export DEDALUS_API_KEY=...    # Dedalus API key for Minds/Dedalus runner
+export GITHUB_TOKEN=...      # fallback direct GitHub API fetch
 ```
 
-### WorkflowEvent (Pydantic Model)
-```python
-class WorkflowEvent(BaseModel):
-    source: EventSource  # github | calendar
-    event_type: str  # commit, meeting, sleep
-    intensity: int = Field(ge=1, le=10)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
-class EventSource(str, Enum):
-    GITHUB = "github"
-    CALENDAR = "calendar"
+Run a single loop iteration:
+
+```bash
+python3 orchestrator.py --once
 ```
 
-### ConwayConflict (Pydantic Model)
-```python
-class ConwayConflict(BaseModel):
-    twin_hp: int
-    cortex_msg: str  # Logic agent's argument
-    core_msg: str    # Biology agent's argument
-    recommended_action: str  # "rest" | "override"
-    reasoning: str   # Why this conflict occurred
-```
+Behavior notes:
+- If `USE_MCP=true` the orchestrator will prefer MCP wrappers (`mcp_github`, `mcp_spotify`, `mcp_calendar`) which use Dedalus MCP servers specified inside those modules.
+- If an MCP call fails, the orchestrator falls back to local logic (e.g., `burnout_scanner.fetch_commits_directly()`).
 
 ---
 
-## Backend Implementation Guide
+## Developer Guidance: Prompting & Robustness
 
-### 1. FastAPI Route Structure
-
-**Core Endpoints:**
-```python
-@app.get("/api/twin/state")
-async def get_twin_state() -> TwinState:
-    """Retrieve current twin state from DB"""
-    
-@app.post("/api/twin/ingest")
-async def ingest_event(event: WorkflowEvent) -> TwinState:
-    """Process workflow event and update twin state"""
-    
-@app.post("/api/conway/decide")
-async def trigger_decision(action: str) -> ConwayConflict:
-    """Run Conway multi-agent decision when HP is critical"""
-```
-
-### 2. HP/XP Update Logic
-
-**Event Impact Rules:**
-- **GitHub Commit:** HP -5, XP +10
-- **Calendar Meeting:** HP -10, XP +5 (if work-related)
-- **Sleep Event:** HP +20, XP +0
-- **Deep Work Block:** HP -15, XP +20
-
-**Status Calculation:**
-```python
-def calculate_status(hp: int) -> TwinStatus:
-    if hp > 70:
-        return TwinStatus.THRIVING
-    elif hp >= 30:
-        return TwinStatus.STRAINED
-    else:
-        return TwinStatus.BURNOUT
-```
-
-### 3. Conway Decision Engine Implementation
-
-**When to Trigger:**
-- User attempts to schedule meeting when `hp < 30`
-- User commits code when `hp < 20`
-- Any action when `status == BURNOUT`
-
-**Multi-Agent Prompt Structure:**
-```python
-# TODO: Replace with actual Claude API call
-async def generate_conflict(twin_state: TwinState, attempted_action: str) -> ConwayConflict:
-    """
-    System Prompt:
-    You are two competing AI agents debating a decision:
-    
-    CORTEX (Logic Agent): Argues for productivity, efficiency, meeting deadlines
-    CORE (Biology Agent): Argues for rest, health, long-term sustainability
-    
-    Current State: HP={twin_state.hp}, XP={twin_state.xp}
-    Attempted Action: {attempted_action}
-    
-    Generate a conflict dialogue where:
-    1. Cortex argues why the action should proceed
-    2. Core argues why immediate rest is critical
-    3. Use technical/systems language (treat human as a machine)
-    
-    Output JSON with: cortex_msg, core_msg, recommended_action
-    """
-    # For now, return mock responses based on HP threshold
-    pass
-```
-
-### 4. Dedalus MCP Integration Points
-
-```python
-# mcp_client.py
-# TODO: Implement actual Dedalus MCP SDK calls
-
-async def fetch_github_events(username: str, hours: int = 24) -> List[WorkflowEvent]:
-    """Fetch recent commits/PRs from GitHub via Dedalus MCP"""
-    # Mock for now: return sample events
-    pass
-
-async def fetch_calendar_events(hours: int = 24) -> List[WorkflowEvent]:
-    """Fetch calendar meetings via Dedalus MCP"""
-    # Mock for now: return sample events
-    pass
-```
+- Keep prompts strict and include the exact JSON schema expected. Ask the model to "output ONLY valid JSON" to reduce parsing work.
+- Use small helper to extract the first balanced JSON object from model output (implemented in `persona_manager.py`).
+- Use `minds_ai.run_prompt()` for both MCP invocations and persona prompts — it wraps DedalusRunner and supports `mcp_servers`.
+- Add retries and timeouts at network boundaries if needed.
 
 ---
 
-## Frontend Implementation Guide
+## Files of Interest (repo)
 
-### 1. Component Hierarchy
+- `orchestrator.py` — main loop & sensors
+- `persona_manager.py` — AI-driven persona + JSON contract
+- `mcp_github.py`, `mcp_spotify.py`, `mcp_calendar.py` — MCP adapters
+- `burnout_scanner.py` — direct GitHub fallback and local heuristics
+- `minds_ai.py` — Dedalus runner wrapper
 
-```
-App.jsx
-└── Dashboard.jsx
-    ├── TaskStream.jsx (left sidebar)
-    ├── TwinAvatar.jsx (center canvas)
-    ├── StatsPanel.jsx (right sidebar)
-    └── InterventionModal.jsx (overlay)
-```
-
-### 2. TwinAvatar Visual States
-
-**THRIVING State:**
-- Background: Gradient green/blue
-- Avatar: Emoji 😊 or peaceful animation
-- Animations: Gentle floating, breathing effect
-
-**STRAINED State:**
-- Background: Gradient yellow/orange
-- Avatar: Emoji 😓 or tired animation
-- Animations: Slower movements, slight flicker
-
-**BURNOUT State:**
-- Background: Red/black, glitch effects
-- Avatar: Emoji 💀 or corrupted sprite
-- Animations: Shake/glitch using Framer Motion
-```jsx
-<motion.div
-  animate={{
-    x: status === 'burnout' ? [0, -5, 5, -5, 5, 0] : 0,
-    opacity: status === 'burnout' ? [1, 0.7, 1, 0.7, 1] : 1,
-  }}
-  transition={{ duration: 0.5, repeat: status === 'burnout' ? Infinity : 0 }}
->
-  {/* Avatar content */}
-</motion.div>
-```
-
-### 3. InterventionModal Design
-
-**Layout:**
-```
-┌────────────────────────────────────────┐
-│   SYSTEM RESOURCE CONFLICT DETECTED    │
-├──────────────────┬─────────────────────┤
-│   CORTEX 🔷      │      CORE ❤️        │
-│   "Execute..."   │   "Shutdown..."     │
-├──────────────────┴─────────────────────┤
-│  [Override] vs. [Rest]                 │
-└────────────────────────────────────────┘
-```
-
-**Styling:**
-- Modal backdrop: `backdrop-blur-sm bg-black/50`
-- Cortex side: Blue geometric theme, sharp edges
-- Core side: Red organic theme, rounded shapes
-- Buttons: Contrasting colors (blue vs red)
-
-### 4. State Management Pattern
-
-```jsx
-// useTwinState.js custom hook
-const useTwinState = () => {
-  const [twinState, setTwinState] = useState(null);
-  const [conflict, setConflict] = useState(null);
-  
-  const ingestEvent = async (event) => {
-    const response = await fetch('/api/twin/ingest', {
-      method: 'POST',
-      body: JSON.stringify(event),
-    });
-    const newState = await response.json();
-    setTwinState(newState);
-    
-    // Trigger conflict check if HP is critical
-    if (newState.hp < 30) {
-      const conflictData = await triggerConwayDecision();
-      setConflict(conflictData);
-    }
-  };
-  
-  return { twinState, conflict, ingestEvent };
-};
-```
+Removed: `run.py` (demo script removed to keep repo focused on orchestrator flow).
 
 ---
 
-## Development Workflow
+## Quick Dev Tasks / Next Improvements
 
-### Phase 1: Backend Scaffold (1-2 hours)
-1. Set up FastAPI project structure
-2. Create Pydantic models (TwinState, WorkflowEvent, ConwayConflict)
-3. Implement SQLite DB operations (init, read, update)
-4. Build `/api/twin/state` and `/api/twin/ingest` with MOCK data
-5. Test with curl/Postman
-
-### Phase 2: Frontend Scaffold (1-2 hours)
-1. Set up Vite + React + Tailwind project
-2. Build Dashboard layout (3-column grid)
-3. Create TwinAvatar with THREE status states (use emojis/divs)
-4. Implement StatsPanel with mock HP/XP bars
-5. Test state transitions with hardcoded values
-
-### Phase 3: Integration (1-2 hours)
-1. Connect frontend to backend API
-2. Implement `useTwinState` hook
-3. Wire up TaskStream drag-and-drop to trigger `/ingest`
-4. Test full flow: drag task → HP changes → avatar updates
-
-### Phase 4: Conway Engine (2-3 hours)
-1. Implement Conway decision endpoint (`/api/conway/decide`)
-2. Integrate Claude API for multi-agent conflict generation
-3. Build InterventionModal component
-4. Test conflict triggers and resolution
-
-### Phase 5: MCP Integration (2-3 hours)
-1. Set up Dedalus MCP SDK
-2. Replace mock GitHub events with real MCP calls
-3. Replace mock Calendar events with real MCP calls
-4. Add sync button to pull latest workflow data
-
-### Phase 6: Polish & Demo (2-3 hours)
-1. Add Framer Motion animations (glitch effects, smooth transitions)
-2. Create demo script with realistic scenario
-3. Record demo video showing full flow
-4. Write README with screenshots
-5. Deploy (Vercel frontend + Railway/Render backend)
+1. Harden JSON parsing: validate required keys and types, set defaults when missing.
+2. Add unit tests for `persona_manager.update_from_events()` using mocked `minds_ai.run_prompt()` responses.
+3. Add a debug mode that logs raw model outputs to a file for later prompt-engineering.
+4. Optional: add a small REST wrapper to expose `persona_state` for a frontend prototype.
 
 ---
 
-## Demo Script for Judges
+If you'd like, I can also:
 
-**Setup:** Show dashboard in THRIVING state (HP: 85)
+- Add a sample prompt that yields conservative adjustments (small deltas) for safer behavior.
+- Generate unit tests and a `requirements.txt` for CI.
 
-**Act 1 - The Grind:**
-1. Drag "Fix Critical Bug" task → HP drops to 70 (STRAINED)
-2. Drag "Team Standup" task → HP drops to 55
-3. Drag "Write Documentation" task → HP drops to 40
-4. Avatar starts looking tired, stats panel turns yellow
+Pick one and I'll implement it next.
 
-**Act 2 - The Breaking Point:**
-1. Attempt to drag "Client Meeting" task → HP would drop to 25 (BURNOUT)
-2. **INTERVENTION MODAL POPS UP**
-3. **Cortex:** "Meeting efficiency +15%. Sleep is optional. Execute."
-4. **Core:** "Biological fuel critical. Hardware damage imminent. Shutdown required."
-
-**Act 3 - The Choice:**
-- **Option A (Override):** HP drops to 25, avatar glitches violently, XP +5
-- **Option B (Rest):** HP restored to 60, avatar calms down, XP +0
-
-**Closing:** 
-"Unlike text warnings you ignore, PROXY makes burnout VISIBLE and forces you to acknowledge the trade-off."
-
----
-
-## Key Hackathon Strategies
-
-### For Conway AI Track:
-- Emphasize the MULTI-AGENT conflict (Cortex vs Core)
-- Use technical systems language in agent dialogue
-- Show how it aids decision-making (not just warns)
-- Highlight the "System Resource Conflict" framing
-
-### For Dedalus MCP Track:
-- Showcase MULTIPLE MCP integrations (GitHub + Calendar)
-- Demonstrate real-time data syncing
-- Build a compelling use case for MCP hosting
-- Show how MCP enables seamless workflow integration
-
-### General Tips:
-- **Visual > Technical:** Judges remember animations, not code
-- **Story > Stats:** The "Cortex vs Core" narrative is the hook
-- **Live Demo > Video:** If possible, run it live with real GitHub data
-- **Practice Pitch:** 2-minute version that hits all key points
 
 ---
 

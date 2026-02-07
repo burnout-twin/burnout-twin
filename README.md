@@ -69,3 +69,37 @@ python3 slack_burnout.py
     Pattern Recognition: Python logic filters for high-risk signals (timestamps, keywords).
 
     AI Diagnosis: Dedalus AI acts as a clinical psychologist, reviewing the evidence to provide a "Burnout Score" (0-100) and actionable advice.
+
+## 🧩 Running with Dedalus MCPs (Spotify / Calendar / GitHub)
+
+To use the MCP servers instead of local/simulated data, set `USE_MCP=true` in your `.env` and provide a valid `DEDALUS_API_KEY`.
+
+Example `.env` additions:
+
+```
+USE_MCP=true
+DEDALUS_API_KEY=your_dedalus_api_key_here
+```
+
+Run the orchestrator (development):
+
+```bash
+# fallback mode (direct GitHub)
+export USE_MCP=false
+python3 orchestrator.py
+
+# MCP mode (Dedalus MCPs)
+export USE_MCP=true
+export DEDALUS_API_KEY="your_key_here"
+python3 orchestrator.py
+```
+
+Quick test: run a single iteration by starting the orchestrator and Ctrl-C after one cycle, or use the `--once` flag (works for manual testing):
+
+```bash
+python3 orchestrator.py --once
+```
+
+Notes:
+- If an MCP requires OAuth, `mcp_github.py` will print a connect URL on first run; open it in a browser and authorize.
+- Do not commit `.env` or API keys to source control.
