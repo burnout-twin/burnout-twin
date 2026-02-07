@@ -1,12 +1,46 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Brain } from "lucide-react"
 import { TwinAvatar } from "@/components/twin-avatar"
+import type { StressBand } from "@/components/twin-avatar"
 import { BurnoutProximity } from "@/components/burnout-proximity"
 import { StressDrivers } from "@/components/stress-drivers"
 import { MicroIntervention } from "@/components/micro-intervention"
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+
+type TwinState = {
+  stressBand: StressBand
+  burnoutValue: number
+  avatar: string
+}
+
+const defaultState: TwinState = {
+  stressBand: "Focused",
+  burnoutValue: 28,
+  avatar: "/avatar-happy.png",
+}
+
 export default function Page() {
+  const [state, setState] = useState<TwinState>(defaultState)
+
+  useEffect(() => {
+    const fetchState = () => {
+      fetch(`${API_BASE}/state`)
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error("Not ok")))
+        .then((data: TwinState) => setState({
+          stressBand: data.stressBand ?? defaultState.stressBand,
+          burnoutValue: typeof data.burnoutValue === "number" ? data.burnoutValue : defaultState.burnoutValue,
+          avatar: data.avatar ?? defaultState.avatar,
+        }))
+        .catch(() => { /* keep previous state if API unreachable */ })
+    }
+    fetchState()
+    const id = setInterval(fetchState, 2500)
+    return () => clearInterval(id)
+  }, [])
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -48,7 +82,7 @@ export default function Page() {
             <h2 className="sr-only">State at a Glance</h2>
             <p className="text-3xl font-semibold text-foreground">Hey Twin!</p>
             <div className="flex-1 flex items-center justify-center min-h-0">
-              <TwinAvatar band="Focused" />
+              <TwinAvatar band={state.stressBand} src={state.avatar} />
             </div>
           </section>
 
@@ -56,7 +90,7 @@ export default function Page() {
           <div className="flex flex-col gap-6">
             {/* Burnout Proximity + Stress Drivers */}
             <section className="rounded-2xl bg-card border border-border shadow-sm p-6 flex flex-col gap-5">
-              <BurnoutProximity value={28} />
+              <BurnoutProximity value={state.burnoutValue} />
               <div className="border-t border-border pt-4">
                 <StressDrivers />
               </div>
