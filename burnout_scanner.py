@@ -2,6 +2,8 @@ import asyncio
 import os
 import json
 import httpx
+import signal
+import sys
 from datetime import datetime
 from typing import List, Dict, Any
 from dotenv import load_dotenv
@@ -142,15 +144,30 @@ async def analyze_with_dedalus(commits):
     return result.output
 
 # --- 3. MAIN EXECUTION ---
-async def main():
+async def run_worker(stop_event: asyncio.Event):
+    """
+    Worker that performs fetch + analysis. It respects `stop_event` and
+    can be cancelled gracefully by the main runner.
+    """
     # Step 1: Fetch Data (Reliable Way)
+    if stop_event.is_set():
+        print("⏹️  Stop requested before starting fetch.")
+        return
+
     commits = await fetch_commits_directly()
-    
+    if stop_event.is_set():
+        print("⏹️  Stop requested after fetch; aborting analysis.")
+        return
+
     if not commits:
         return
 
     # Step 2: Analyze Data (AI Way)
     ai_response = await analyze_with_dedalus(commits)
+
+    if stop_event.is_set():
+        print("⏹️  Stop requested after analysis; skipping output.")
+        return
 
     # Step 3: Print Results
     print("\n" + "="*40)
@@ -158,5 +175,60 @@ async def main():
     print("="*40)
     print(ai_response)
 
+
+async def main():
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _set_stop():
+        if not stop_event.is_set():
+            print("\n⚠️  Stop signal received — shutting down gracefully...")
+            stop_event.set()
+
+    # Unix signal handlers (SIGINT / SIGTERM)
+    try:
+        loop.add_signal_handler(signal.SIGINT, _set_stop)
+        loop.add_signal_handler(signal.SIGTERM, _set_stop)
+    except NotImplementedError:
+        # Some platforms (or event loops) may not support add_signal_handler
+        signal.signal(signal.SIGINT, lambda *_: _set_stop())
+        signal.signal(signal.SIGTERM, lambda *_: _set_stop())
+
+    # Also allow users to press 'q' + Enter to quit (non-blocking)
+    def _on_stdin():
+        try:
+            data = sys.stdin.readline()
+        except Exception:
+            data = None
+        if data and data.strip().lower() in ("q", "quit", "exit"):
+            _set_stop()
+
+    try:
+        loop.add_reader(sys.stdin.fileno(), _on_stdin)
+    except Exception:
+        # If adding reader isn't supported, ignore — signals still work.
+        pass
+
+    worker = asyncio.create_task(run_worker(stop_event))
+
+    # Wait for either worker completion or stop_event
+    done, pending = await asyncio.wait(
+        [worker, asyncio.create_task(stop_event.wait())],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    # If stop was requested and worker is still running, cancel it.
+    if stop_event.is_set() and not worker.done():
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            print("✅ Worker cancelled.")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Fallback: ensure we exit gracefully on Ctrl-C
+        print("\nKeyboardInterrupt: exiting.")

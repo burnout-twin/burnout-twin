@@ -55,6 +55,14 @@ Bash
 
 python3 burnout_scanner.py
 
+Stopping the scanner:
+
+- Press `Ctrl-C` (SIGINT) to stop gracefully — the script will cancel any in-progress work and exit.
+- Send `SIGTERM` (e.g. `kill <pid>`) to request a graceful shutdown.
+- Or type `q` then Enter in the running terminal to quit interactively.
+
+The scanner will attempt a clean shutdown and cancel ongoing network calls when a stop is requested.
+
 2. Run the Social Battery Sensor
 
 Simulates a Slack conversation that degrades from polite to toxic to demonstrate social withdrawal detection.
